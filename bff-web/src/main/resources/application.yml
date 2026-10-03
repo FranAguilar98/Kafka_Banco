@@ -1,0 +1,83 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: bff-web
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:bank_batch}
+    username: ${DB_USER:bank_batch}
+    password: ${DB_PASSWORD:bank_batch}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+
+security:
+  jwt:
+    secret: ${WEB_JWT_SECRET:web-bff-super-secreto-cambiar-en-produccion-0001}
+    issuer: bff-web
+    expiration-minutes: ${WEB_JWT_EXP_MIN:60}
+
+backend:
+  connect-timeout-ms: 2000
+  read-timeout-ms: 3000
+  oauth:
+    token-url: http://localhost:9000/oauth2/token
+    client-id: bff-web-client
+    client-secret: web-secret-2026
+    scope: cuentas.read movimientos.read transacciones.read
+  ms-cuentas:
+    base-url: http://localhost:8090
+  ms-movimientos:
+    base-url: http://localhost:8091
+  ms-transacciones:
+    base-url: http://localhost:8092
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      msCuentas:
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+      msMovimientos:
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+      msTransacciones:
+        sliding-window-size: 5
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+  retry:
+    instances:
+      msCuentas:
+        max-attempts: 3
+        wait-duration: 500ms
+      msMovimientos:
+        max-attempts: 3
+        wait-duration: 500ms
+      msTransacciones:
+        max-attempts: 3
+        wait-duration: 500ms
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,circuitbreakers
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  level:
+    com.duocuc.bankbff: INFO

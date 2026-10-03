@@ -1,0 +1,101 @@
+services:
+  config-server:
+    build: ./config-server
+    image: config-server
+    ports:
+      - "8888:8888"
+    restart: on-failure
+
+  auth-server:
+    build: ./auth-server
+    image: auth-server
+    ports:
+      - "9000:9000"
+    restart: on-failure
+
+  ms-cuentas:
+    build: ./ms-cuentas
+    image: ms-cuentas
+    ports:
+      - "8090:8090"
+    environment:
+      SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
+    depends_on:
+      - config-server
+      - auth-server
+    restart: on-failure
+
+  ms-movimientos:
+    build: ./ms-movimientos
+    image: ms-movimientos
+    ports:
+      - "8091:8091"
+    environment:
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      EUREKA_CLIENT_ENABLED: "false"
+    depends_on:
+      - auth-server
+    restart: on-failure
+
+  ms-transacciones:
+    build: ./ms-transacciones
+    image: ms-transacciones
+    ports:
+      - "8092:8092"
+    environment:
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+    depends_on:
+      - auth-server
+    restart: on-failure
+
+  bff-web:
+    build: ./bff-web
+    image: bff-web
+    ports:
+      - "8081:8081"
+    environment:
+      BACKEND_OAUTH_TOKENURL: http://auth-server:9000/oauth2/token
+      BACKEND_MSCUENTAS_BASEURL: http://ms-cuentas:8090
+      BACKEND_MSMOVIMIENTOS_BASEURL: http://ms-movimientos:8091
+      BACKEND_MSTRANSACCIONES_BASEURL: http://ms-transacciones:8092
+    depends_on:
+      - auth-server
+      - ms-cuentas
+      - ms-movimientos
+      - ms-transacciones
+    restart: on-failure
+
+  bff-mobile:
+    build: ./bff-mobile
+    image: bff-mobile
+    ports:
+      - "8082:8082"
+    environment:
+      BACKEND_OAUTH_TOKENURL: http://auth-server:9000/oauth2/token
+      BACKEND_MSCUENTAS_BASEURL: http://ms-cuentas:8090
+      BACKEND_MSMOVIMIENTOS_BASEURL: http://ms-movimientos:8091
+      BACKEND_MSTRANSACCIONES_BASEURL: http://ms-transacciones:8092
+    depends_on:
+      - auth-server
+      - ms-cuentas
+      - ms-transacciones
+    restart: on-failure
+
+  bff-atm:
+    build: ./bff-atm
+    image: bff-atm
+    ports:
+      - "8083:8083"
+    environment:
+      BACKEND_OAUTH_TOKENURL: http://auth-server:9000/oauth2/token
+      BACKEND_MSCUENTAS_BASEURL: http://ms-cuentas:8090
+      BACKEND_MSMOVIMIENTOS_BASEURL: http://ms-movimientos:8091
+      BACKEND_MSTRANSACCIONES_BASEURL: http://ms-transacciones:8092
+    depends_on:
+      - auth-server
+      - ms-cuentas
+      - ms-movimientos
+    restart: on-failure

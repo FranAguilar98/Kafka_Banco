@@ -1,0 +1,44 @@
+server:
+  port: ${SERVER_PORT:8092}
+
+spring:
+  application:
+    name: ms-transacciones
+  datasource:
+    url: jdbc:h2:mem:mstransacciones;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ms-transacciones
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.duocuc.bankbff.mstransacciones.event"
+        spring.json.value.default.type: com.duocuc.bankbff.mstransacciones.event.MovimientoRegistradoEvent
+        spring.json.use.type.headers: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9000
+
+app:
+  kafka:
+    topics:
+      movimiento-registrado: movimiento-registrado
+
+logging:
+  level:
+    com.duocuc.bankbff: INFO

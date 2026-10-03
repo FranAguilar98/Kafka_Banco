@@ -1,0 +1,56 @@
+server:
+  port: 9000
+
+spring:
+  application:
+    name: auth-server
+
+  security:
+    oauth2:
+      authorizationserver:
+        client:
+          bff-web-client:
+            registration:
+              client-id: bff-web-client
+              client-secret: "{noop}web-secret-2026"
+              client-authentication-methods:
+                - client_secret_basic
+              authorization-grant-types:
+                - client_credentials
+              scopes:
+                - cuentas.read
+                - transacciones.read
+                - movimientos.read
+            require-authorization-consent: false
+
+          bff-mobile-client:
+            registration:
+              client-id: bff-mobile-client
+              client-secret: "{noop}mobile-secret-2026"
+              client-authentication-methods:
+                - client_secret_basic
+              authorization-grant-types:
+                - client_credentials
+              scopes:
+                - cuentas.read
+                - movimientos.read
+                - transacciones.read
+            require-authorization-consent: false
+
+          bff-atm-client:
+            registration:
+              client-id: bff-atm-client
+              client-secret: "{noop}atm-secret-2026"
+              client-authentication-methods:
+                - client_secret_basic
+              authorization-grant-types:
+                - client_credentials
+              scopes:
+                - cuentas.read
+                - cuentas.write
+                - movimientos.write
+            require-authorization-consent: false
+
+logging:
+  level:
+    org.springframework.security: INFO
