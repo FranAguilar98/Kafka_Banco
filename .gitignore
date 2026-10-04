@@ -7,3 +7,4 @@ target/
 *.log
 logs-compose.txt
 *.pem
+.env

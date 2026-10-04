@@ -1,215 +1,268 @@
 # Banco XYZ — Suite BFF (Backend for Frontend)
 
-**PBY2203 — Desarrollo Backend III — Semana 7 (Exp3)**
+**PBY2203 — Desarrollo Backend III — Experiencia 3 (Semana 8)**
 
+Esta entrega agrega a la suite BFF de la Semana 7: **seguridad OAuth2 (`client_credentials`)** entre los BFF y los microservicios, **imágenes Docker** por módulo, un **`docker-compose.yaml`** que orquesta todo el proyecto y **Kafka desplegado en una instancia EC2**. Resilience4j y Kafka ya existían desde la Semana 7 y se verificaron dentro del nuevo entorno.
+
+---
 
 ## 1. Objetivo del proyecto
 
-Implementar el patrón **Backend for Frontend (BFF)** para optimizar la
-comunicación entre los distintos frontends del Banco XYZ, integrando y
-agregando información desde servicios backend independientes. Se
-implementa **un BFF independiente por canal**, y **un microservicio
-independiente por dominio de datos**:
+Implementar el patrón **Backend for Frontend (BFF)**: un BFF independiente por canal y un microservicio independiente por dominio de datos.
 
 | BFF | Puerto | Cliente | Enfoque |
 |---|---|---|---|
 | `bff-web` | 8081 | Navegador / back-office | Datos completos, paginación y filtros |
-| `bff-mobile` | 8082 | App móvil | Respuestas livianas, mínimo consumo de ancho de banda |
-| `bff-atm` | 8083 | Cajero automático | Superficie mínima, máxima seguridad, operaciones críticas |
+| `bff-mobile` | 8082 | App móvil | Respuestas livianas |
+| `bff-atm` | 8083 | Cajero automático | Superficie mínima, operaciones críticas |
 
 | Microservicio | Puerto | Dueño de |
 |---|---|---|
 | `ms-cuentas` | 8090 | Saldo e interés de cada cuenta |
-| `ms-movimientos` | 8091 | Historial de retiros/depósitos por cuenta |
-| `ms-transacciones` | 8092 | Feed global de transacciones (detección de anomalías) |
+| `ms-movimientos` | 8091 | Historial de retiros/depósitos (productor Kafka) |
+| `ms-transacciones` | 8092 | Feed global de transacciones y anomalías (consumidor Kafka) |
 
-Ningún BFF accede a la base de datos directamente: todos llaman a estos
-tres microservicios por HTTP (con `RestClient`, protegido con
-Resilience4j), y combinan su información según lo que necesita cada
-canal — por ejemplo, un retiro en `bff-atm` llama a `ms-cuentas` para
-descontar el saldo **y** a `ms-movimientos` para registrar el
-movimiento correspondiente.
+| Servicio de infraestructura | Puerto | Función |
+|---|---|---|
+| `config-server` | 8888 | Configuración centralizada (`ms-cuentas` toma de aquí su puerto y su datasource) |
+| `auth-server` | 9000 | Servidor de autorización OAuth2 (Spring Authorization Server) |
 
-Desde la Semana 7 (Exp3), `ms-movimientos` además **publica un evento
-en Kafka** (`movimiento-registrado`) por cada movimiento nuevo, que
-`ms-transacciones` consume de forma asíncrona para alimentar su feed
-global y aplicar detección de anomalías — sin que el BFF ni
-`ms-movimientos` esperen esa respuesta. Ver el detalle completo en
-[`docs/ADR-02-arquitectura-eventos.md`](docs/ADR-02-arquitectura-eventos.md).
+Los BFF no acceden a datos directamente: llaman a los tres microservicios por HTTP (`RestClient`), protegidos con **OAuth2** y **Resilience4j**. Un retiro en `bff-atm` descuenta el saldo en `ms-cuentas` y registra el movimiento en `ms-movimientos`, que publica el evento `movimiento-registrado` en **Kafka**; `ms-transacciones` lo consume y genera la transacción.
 
-El análisis completo de las decisiones de arquitectura de la Semana 4/5
-(BFF como servicios independientes, y microservicios de dominio detrás
-de ellos) está en
-[`docs/ADR-01-estrategia-bff.md`](docs/ADR-01-estrategia-bff.md).
+## 2. Arquitectura
 
+```
+                       ┌──────────────┐
+                       │ auth-server  │  emite tokens OAuth2
+                       │   :9000      │  (client_credentials)
+                       └──────▲───────┘
+                              │ token (1 por BFF, se reutiliza ~5 min)
+ Web ──► bff-web    :8081 ────┤
+ App ──► bff-mobile :8082 ────┼──► ms-cuentas        :8090  (Resource Server)
+ ATM ──► bff-atm    :8083 ────┤──► ms-movimientos    :8091  (Resource Server) ──┐ publica evento
+                              └──► ms-transacciones  :8092  (Resource Server) ◄─┘ consume evento
+                                                                  ▲
+                                          Kafka (EC2) ────────────┘  topic: movimiento-registrado
+```
 
-## 2. Estructura del código
+## 3. Estructura del código
+
+```
 Exp3_S7_Grupo20/
-├── pom.xml # POM padre (multi-módulo Maven)
-├── docker-compose.yml # Postgres + Kafka (KRaft, un solo nodo)
-├── docs/
-│ ├── ADR-01-estrategia-bff.md
-│ └── ADR-02-arquitectura-eventos.md # Decisión Kafka + Resilience4j (Semana 7)
-├── evidencia/ # Capturas / salidas de consola (ver sección 6)
-├── bff-core/ # Librería compartida: JWT/seguridad + excepciones
-│ └── .../core/
-│ ├── security/ # JwtTokenProvider, JwtAuthenticationFilter
-│ └── exception/ # Excepciones de dominio compartidas (incluye ServicioNoDisponibleException)
-├── bff-web/ # Spring Boot app — canal Web (puerto 8081) — Resilience4j
-├── bff-mobile/ # Spring Boot app — canal Móvil (puerto 8082) — Resilience4j
-├── bff-atm/ # Spring Boot app — canal Cajero (puerto 8083) — Resilience4j
-├── ms-cuentas/ # Microservicio — cuentas/saldo (puerto 8090)
-├── ms-movimientos/ # Microservicio — movimientos (puerto 8091) — productor Kafka
-│ └── .../msmovimientos/event/ # MovimientoRegistradoEvent, MovimientoEventPublisher
-└── ms-transacciones/ # Microservicio — feed global (puerto 8092) — consumidor Kafka
-  └── .../mstransacciones/
-    ├── event/ # MovimientoRegistradoEvent (contrato espejo)
-    └── listener/ # MovimientoEventListener (@KafkaListener)
+├── pom.xml                      # POM padre (multi-módulo Maven)
+├── docker-compose.yaml          # Orquesta los 8 servicios (sin Kafka: va en la EC2)
+├── docker-compose.kafka-local.yml  # Compose antiguo (Kafka local para desarrollo)
+├── .env                         # KAFKA_BOOTSTRAP_SERVERS=<IP_EC2>:9092 (ver sección 5)
+├── evidencia/                   # Capturas y documento de evidencia (sección 10)
+├── bff-core/                    # Librería compartida: JWT, excepciones, clientes HTTP y OAuth2
+│   └── .../core/config/         # BackendClientsConfig, OAuth2TokenInterceptor
+├── bff-web/  bff-mobile/  bff-atm/        # Un Dockerfile cada uno
+├── ms-cuentas/  ms-movimientos/  ms-transacciones/   # Un Dockerfile cada uno
+├── config-server/               # Dockerfile + config-repo/ms-cuentas.yml
+├── auth-server/                 # Dockerfile + clientes OAuth2 en application.yml
+├── eureka-server/               # Existe, pero no se usa en esta entrega
+└── data/                        # CSV oficiales
+```
 
-Cada `bff-*` sigue la misma forma interna: `config` (seguridad + clientes
-HTTP), `client` (llamadas a los microservicios), `controller`, `service`
-(ahora con `@CircuitBreaker`/`@Retry` de Resilience4j), `dto`. Cada
-`ms-*` sigue la misma forma: `entity`, `repository`, `controller`,
-`dto` — son los únicos módulos que tienen acceso JPA a la base de datos.
+## 4. Requisitos previos
 
-## 3. Requisitos previos
-
-- Java 17
+- Java 17 o superior (los módulos compilan para 17; las imágenes Docker usan `eclipse-temurin:21-jre`)
 - Maven 3.9+
-- Docker (para levantar PostgreSQL y Kafka) — o un PostgreSQL/Kafka locales equivalentes
+- Docker Desktop (con Docker Compose v2)
+- Una instancia con Kafka accesible (ver sección 9) o el Kafka local del compose antiguo
 
-## 4. Cómo ejecutar
-
-### Modo de prueba (H2 en memoria — el usado para la evidencia de este entregable)
-
-Los tres microservicios (`ms-cuentas`, `ms-movimientos`, `ms-transacciones`)
-están configurados para arrancar con una base de datos H2 en memoria,
-que se autogenera y se llena automáticamente al iniciar leyendo los CSV
-oficiales (`bank_legacy_data`) desde `src/main/resources/data/`. No
-requiere Docker ni PostgreSQL para este modo.
+## 5. Cómo ejecutar (Docker Compose)
 
 ```bash
-# 1) Levantar Kafka (necesario para el flujo de eventos de la Semana 7)
-docker compose up -d kafka
+# 1) Compilar y empaquetar los jars ejecutables (una vez, o cada vez que cambie el código)
+mvn clean package -DskipTests
 
-# 2) Compilar e instalar todo el multi-módulo (una sola vez, o cada vez que cambie el código)
-mvn clean install
+# 2) Indicar dónde está Kafka (archivo .env junto al docker-compose.yaml)
+echo KAFKA_BOOTSTRAP_SERVERS=<IP_ELASTICA_EC2>:9092 > .env
 
-# 3) Levantar los microservicios primero (los BFF dependen de ellos), cada uno en su propia terminal
-mvn -pl ms-cuentas       spring-boot:run
-mvn -pl ms-movimientos   spring-boot:run
-mvn -pl ms-transacciones spring-boot:run
+# 3) Construir las imágenes y levantar los 8 servicios
+docker compose up -d --build
 
-# 4) Levantar cada BFF, cada uno en su propia terminal
-mvn -pl bff-web    spring-boot:run
-mvn -pl bff-mobile spring-boot:run
-mvn -pl bff-atm    spring-boot:run
+# 4) Comprobar que todos están en "Up"
+docker compose ps
 ```
 
-### Verificar el flujo de eventos (Semana 7)
+Servicios que levanta el compose: `config-server`, `auth-server`, `ms-cuentas`, `ms-movimientos`, `ms-transacciones`, `bff-web`, `bff-mobile` y `bff-atm`. No incluye base de datos externa: los microservicios usan **H2 en memoria** y cargan los CSV oficiales al iniciar.
 
-1. Haz un retiro por cualquier canal, por ejemplo:
-   `POST /api/atm/cuentas/101/retiro` con `{ "monto": 10000 }` (ver
-   sección 5 para el login previo).
-2. En la consola de `ms-movimientos` deberías ver el log
-   `Evento movimiento-registrado publicado: ...`.
-3. En la consola de `ms-transacciones` deberías ver, casi de inmediato,
-   `Transaccion generada desde evento: ...` — sin que ningún BFF haya
-   llamado directamente a `ms-transacciones`.
-4. Confirma que aparece en el feed global:
-   `GET /api/web/transacciones` (bff-web) o directamente
-   `GET http://localhost:8092/transacciones/recientes`.
-5. Para probar la tolerancia a fallos: detén `ms-cuentas` y vuelve a
-   pedir un saldo por cualquier canal — tras el `Retry`, deberías
-   recibir `503` con el mensaje de `ServicioNoDisponibleException`, en
-   vez de un error 500 crudo. Revisa `/actuator/circuitbreakers` en el
-   BFF correspondiente para ver el circuito abrirse.
+Para detener todo: `docker compose down`.
 
-Cada microservicio imprime en su log cuántos registros cargó y cuántos
-rechazó por datos inválidos (por ejemplo:
-`ms-cuentas: 17 cuentas cargadas, 983 filas rechazadas por datos invalidos`),
-ya que el dataset oficial incluye intencionalmente filas con datos
-inconsistentes (edades fuera de rango, montos inválidos, tipos de cuenta
-inexistentes, duplicados).
+**Puertos que deben estar libres:** 8081, 8082, 8083, 8090, 8091, 8092, 8888 y 9000.
 
-Cuentas de ejemplo ya cargadas y listas para probar: `101, 105, 106, 108,
-109, 117, 118, 122, 124, 127, 128, 130, 132, 133, 143, 144, 147`.
+### Variables de entorno que usa el compose
 
-Puedes inspeccionar los datos cargados desde el navegador en la consola
-de H2 de cada microservicio, por ejemplo:
-`http://localhost:8090/h2-console` (JDBC URL: `jdbc:h2:mem:mscuentas`,
-usuario `sa`, sin contraseña).
+Dentro de Docker, `localhost` es el propio contenedor, así que el compose reemplaza las URLs de los `application.yml` por los nombres de servicio:
 
-### Modo productivo (PostgreSQL vía Docker)
+| Variable | Valor | Quién la usa |
+|---|---|---|
+| `BACKEND_OAUTH_TOKENURL` | `http://auth-server:9000/oauth2/token` | los 3 BFF |
+| `BACKEND_MSCUENTAS_BASEURL` (y `MSMOVIMIENTOS`, `MSTRANSACCIONES`) | `http://ms-...:puerto` | los 3 BFF |
+| `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI` | `http://auth-server:9000` | los 3 microservicios |
+| `SPRING_CONFIG_IMPORT` | `configserver:http://config-server:8888` | `ms-cuentas` |
+| `KAFKA_BOOTSTRAP_SERVERS` | desde `.env` | `ms-movimientos`, `ms-transacciones` |
 
-Para un despliegue más cercano a producción, cada microservicio también
-puede apuntar a PostgreSQL en vez de H2 (basta con cambiar la
-dependencia `h2` por `postgresql` en su `pom.xml` y ajustar su
-`application.yml` con las credenciales de abajo):
+### Ejecución sin Docker (desarrollo)
 
-```bash
-docker compose up -d
+Cada servicio puede levantarse con `mvn -pl <modulo> spring-boot:run`, en este orden: `config-server`, `auth-server`, los tres `ms-*` y los tres `bff-*`, cada uno en su propia terminal. En ese modo se usan los `localhost` de los `application.yml`.
+
+## 6. Seguridad
+
+### 6.1 OAuth2 entre BFF y microservicios (nuevo en esta entrega)
+
+Los microservicios son **Resource Servers**: rechazan con **401** cualquier petición sin token válido y con **403** si el token no trae el *scope* requerido. Cada BFF obtiene su token del `auth-server` con el flujo **`client_credentials`**; `OAuth2TokenInterceptor` (en `bff-core`) lo pide automáticamente, lo guarda hasta unos 30 segundos antes de que venza (dura 299 s) y lo agrega como `Authorization: Bearer ...` a cada llamada interna. Las credenciales de cada BFF están en su propio `application.yml` (bloque `backend.oauth`), de modo que el mismo código usa credenciales distintas según el canal.
+
+| Cliente OAuth2 | Usado por | Scopes registrados en el `auth-server` |
+|---|---|---|
+| `bff-web-client` | `bff-web` | `cuentas.read`, `movimientos.read`, `transacciones.read` |
+| `bff-mobile-client` | `bff-mobile` | `cuentas.read`, `movimientos.read`, `transacciones.read` |
+| `bff-atm-client` | `bff-atm` | `cuentas.read`, `cuentas.write`, `movimientos.write` |
+
+| Microservicio | Regla de autorización |
+|---|---|
+| `ms-cuentas` | `GET` → `SCOPE_cuentas.read`; `PATCH` → `SCOPE_cuentas.write` |
+| `ms-movimientos` | `GET` → `SCOPE_movimientos.read`; `POST` → `SCOPE_movimientos.write` |
+| `ms-transacciones` | todo → `SCOPE_transacciones.read` |
+
+Probar el `auth-server` directamente (Postman o curl):
+
+```
+POST http://localhost:9000/oauth2/token
+Authorization: Basic  bff-web-client / web-secret-2026
+Body (x-www-form-urlencoded): grant_type=client_credentials
+                              scope=cuentas.read movimientos.read transacciones.read
 ```
 
-Esto levanta un Postgres en `localhost:5432`, base `bank_batch`,
-usuario/clave `bank_batch`/`bank_batch`. En este modo, los datos deben
-poblarse mediante el proyecto de migración batch de la Semana 3 (Spring
-Batch), no con los cargadores CSV descritos arriba.
+> Los tokens emitidos por el `auth-server` dentro de Docker tienen como emisor `http://auth-server:9000`, que coincide con el `issuer-uri` de los microservicios. Por eso las pruebas se hacen **a través de los BFF**; un token pedido a `localhost:9000` no es válido para llamar directamente a un microservicio del compose.
 
-## 5. Autenticación y autorización por canal
+### 6.2 JWT propio de cada canal (sin cambios)
 
-Cada BFF firma y valida **su propio JWT** (clave/issuer distintos), de
-forma que un token de un canal no sirve en otro.
+Cada BFF firma y valida su propio JWT (clave e issuer distintos), así que un token de un canal no sirve en otro. Este JWT autentica a las personas y dispositivos que llaman al BFF, y es independiente de OAuth2, que solo protege la comunicación interna.
 
-### BFF Web (`/api/web/**`)
-POST /api/web/auth/login
-{ "usuario": "admin.web", "password": "Admin#2026" }
-Usuarios demo: `admin.web`/`Admin#2026` (rol `WEB_ADMIN`+`WEB_USER`),
-`operador.web`/`Oper#2026` (rol `WEB_USER`). Token válido 60 min.
+| Canal | Login | Credenciales demo | Vigencia |
+|---|---|---|---|
+| Web | `POST /api/web/auth/login` | `admin.web` / `Admin#2026` | 60 min |
+| Móvil | `POST /api/mobile/auth/login` | `cliente.app` / `Cliente#2026` | 15 min |
+| Cajero | `POST /api/atm/auth/login` | tarjeta `4551000000000001`, PIN `1234` | 15 min |
 
-### BFF Móvil (`/api/mobile/**`)
-POST /api/mobile/auth/login
-{ "usuario": "cliente.app", "password": "Cliente#2026" }
-Token válido solo 15 min (política más estricta por ser dispositivo
-personal).
+Los usuarios demo están definidos en el código de cada BFF; no hay base de datos de usuarios.
 
-### BFF Cajero (`/api/atm/**`)
-Requiere **dos factores de acceso**:
-1. Header `X-Atm-Device-Key: atm-device-key-demo-cambiar` en **toda**
-   petición (identifica al cajero físico como dispositivo autorizado).
-2. Login con tarjeta + PIN, token válido solo 3 minutos:
-POST /api/atm/auth/login
-Header: X-Atm-Device-Key: atm-device-key-demo-cambiar
-Body: { "numeroTarjeta": "4551000000000001", "pin": "1234" }
-Tarjetas demo: `4551000000000001`/PIN `1234` → cuenta 1001;
-`4551000000000002`/PIN `5678` → cuenta 1002. El token queda ligado a esa
-cuenta: no se puede usar para consultar/retirar de otra (ver
-`AtmAccessGuard`).
+El **cajero** exige además el header `X-Atm-Device-Key: atm-device-key-demo-cambiar` en **todas** las rutas, y el token queda ligado a la cuenta de la tarjeta (`AtmAccessGuard`). Cuentas de prueba: tarjeta `...0001` → cuenta `101`; tarjeta `...0002` → cuenta `105`. Cuerpo del login ATM: `{ "numeroTarjeta": "...", "pin": "..." }`.
 
-Los tres microservicios (`ms-cuentas`, `ms-movimientos`,
-`ms-transacciones`) no exponen autenticación propia — son servicios
-internos, solo alcanzables por los BFF dentro de la misma red.
+Los BFF responden **403** (cuerpo vacío) a peticiones sin JWT: es el comportamiento por defecto de Spring Security. Los microservicios responden **401**.
 
-## 6. Endpoints por BFF
+## 7. Endpoints por BFF
 
-### Web
-- `GET /api/web/cuentas?tipo=&page=&size=` — listado paginado, datos completos
-- `GET /api/web/cuentas/{cuentaOrigenId}` — detalle completo de una cuenta
-- `GET /api/web/cuentas/{cuentaOrigenId}/historial-anual` — historial anual
-- `GET /api/web/transacciones?desde=&hasta=&tipo=&page=&size=` — feed global paginado
+**Web**
+- `GET /api/web/cuentas?tipo=&page=&size=` — listado paginado
+- `GET /api/web/cuentas/{id}` — detalle de una cuenta
+- `GET /api/web/cuentas/{id}/historial-anual` — historial (usa `ms-movimientos`)
+- `GET /api/web/transacciones?desde=&hasta=&tipo=&page=&size=` — feed global
 
-### Móvil
-- `GET /api/mobile/cuentas/{cuentaOrigenId}/resumen` — `{cuentaOrigenId, nombre, tipo, saldo}`
-- `GET /api/mobile/movimientos/recientes` — últimos 10 movimientos, campos mínimos
+**Móvil**
+- `GET /api/mobile/cuentas/{id}/resumen`
+- `GET /api/mobile/movimientos/recientes`
 
-### Cajero
-- `GET /api/atm/cuentas/{cuentaOrigenId}/saldo` — solo saldo disponible
-- `POST /api/atm/cuentas/{cuentaOrigenId}/retiro` `{ "monto": 50000 }` — retiro con validación de saldo; internamente descuenta el saldo en `ms-cuentas` y registra el movimiento en `ms-movimientos`
+**Cajero**
+- `GET /api/atm/cuentas/{id}/saldo`
+- `POST /api/atm/cuentas/{id}/retiro` con `{ "monto": 1000 }`
 
-### Microservicios (uso interno de los BFF)
+**Microservicios (uso interno)**
 - `ms-cuentas`: `GET /cuentas`, `GET /cuentas/{id}`, `PATCH /cuentas/{id}/saldo`
 - `ms-movimientos`: `GET /movimientos/cuenta/{id}`, `POST /movimientos`
 - `ms-transacciones`: `GET /transacciones`, `GET /transacciones/recientes`
 
-Todas las respuestas de error siguen el mismo formato
-`{ "timestamp", "status", "error" }`.
+Los errores siguen el formato `{ "timestamp", "status", "error" }`.
+
+## 8. Resilience4j (Circuit Breaker + Retry)
+
+Los servicios de los BFF usan `@CircuitBreaker` y `@Retry` con *fallback* hacia `ServicioNoDisponibleException`, que devuelve un **503** controlado en vez de un error 500. Configuración de `bff-atm` (instancia `msCuentas`):
+
+| Parámetro | Valor |
+|---|---|
+| `sliding-window-size` | 5 llamadas |
+| `minimum-number-of-calls` | 3 |
+| `failure-rate-threshold` | 50 % |
+| `wait-duration-in-open-state` | 10 s |
+| `permitted-number-of-calls-in-half-open-state` | 2 |
+| Retry: `max-attempts` / `wait-duration` | 3 / 500 ms |
+
+**Cómo reproducir la apertura del circuito** (con el compose levantado y un JWT de `bff-atm`):
+
+1. `GET http://localhost:8083/actuator/circuitbreakers` → `msCuentas` en `CLOSED` (requiere el JWT y el header del dispositivo).
+2. `docker compose stop ms-cuentas`
+3. Repetir `GET /api/atm/cuentas/101/saldo` 3 o 4 veces: primero fallan con reintentos cada 500 ms y luego responde 503.
+4. `GET /actuator/circuitbreakers` → `OPEN` (3 fallas de 5 llamadas = 60 % > 50 %). En el log de `bff-atm` aparece `CallNotPermittedException: CircuitBreaker 'msCuentas' is OPEN and does not permit further calls`.
+5. Pasados 10 s el circuito queda en `HALF_OPEN`.
+6. `docker compose start ms-cuentas` y repetir el saldo: vuelve a `CLOSED`.
+
+## 9. Kafka en EC2
+
+Kafka corre en una instancia **EC2 (Ubuntu) del Learner Lab**, con IP elástica y los puertos 22 (SSH) y 9092 (Kafka) abiertos en el Security Group. Es un **único nodo en modo KRaft** (sin Zookeeper), con la imagen `apache/kafka:3.7.0`, más **Kafka UI** (puerto 8080) para inspeccionar topics y consumidores.
+
+Instalación de Docker en la instancia:
+
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker ubuntu
+```
+
+`docker-compose.yaml` de la EC2 (reemplazar `<IP_ELASTICA_EC2>` por la IP elástica de la instancia):
+
+```yaml
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:19093,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,EXTERNAL://<IP_ELASTICA_EC2>:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ec2-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      - kafka
+
+volumes:
+  kafkadata:
+```
+
+Se levanta con `sudo docker compose up -d`. El listener `EXTERNAL` anuncia la IP pública para que los contenedores del proyecto (en la máquina local) puedan conectarse; el listener `PLAINTEXT` es el interno entre contenedores de la EC2.
+
+**Flujo de eventos**
+
+1. `POST /api/atm/cuentas/{id}/retiro` → `bff-atm` descuenta el saldo en `ms-cuentas` y registra el movimiento en `ms-movimientos`.
+2. `ms-movimientos` publica `movimiento-registrado` (clave = cuenta) en Kafka; el log dice `Evento movimiento-registrado publicado: ...`.
+3. `ms-transacciones` (`MovimientoEventListener`, grupo `ms-transacciones`, `auto-offset-reset: earliest`) consume el evento, detecta anomalías (monto mayor a 3.000.000), evita procesar dos veces el mismo evento y guarda la transacción; el log dice `Transaccion generada desde evento: movimientoId=..., cuenta=..., monto=...`.
+4. En Kafka UI (`http://<IP_ELASTICA_EC2>:8080`): el topic `movimiento-registrado` muestra los mensajes y el grupo `ms-transacciones` aparece `STABLE` con **lag 0**, es decir, todos los mensajes fueron leídos.
+
+
+## 10. Evidencia
+La evidencia se entregará en un documento a parte en formato word. 
+
