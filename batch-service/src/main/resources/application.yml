@@ -1,0 +1,45 @@
+spring:
+  config:
+    import: optional:application-secrets.yml
+
+  application:
+    name: batch-migracion-banco-xyz
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/banco_xyz_batch?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  batch:
+    jdbc:
+      initialize-schema: always
+    job:
+      enabled: false
+
+bancoxyz:
+  particion:
+    core-pool-size: 3
+    max-pool-size: 3
+    queue-capacity: 10
+
+app:
+  batch:
+    input:
+      transacciones: classpath:data/movimientos_financieros_diarios.csv
+      intereses: classpath:data/intereses_trimestrales.csv
+      cuentas-anuales: classpath:data/estados_financieros_anuales.csv
+    chunk-size: 5
+    skip-limit: 500
+
+logging:
+  level:
+    cl.duocuc.bancoxyz: INFO
+    org.springframework.batch: INFO

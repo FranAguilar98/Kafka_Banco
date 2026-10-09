@@ -55,7 +55,7 @@ services:
     build: ./bff-web
     image: bff-web
     ports:
-      - "8081:8081"
+      - "8181-8189:8081"
     environment:
       BACKEND_OAUTH_TOKENURL: http://auth-server:9000/oauth2/token
       BACKEND_MSCUENTAS_BASEURL: http://ms-cuentas:8090
