@@ -8,3 +8,4 @@ target/
 logs-compose.txt
 *.pem
 .env
+application-secrets.yml
