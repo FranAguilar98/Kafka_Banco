@@ -13,7 +13,9 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Component
@@ -37,6 +39,7 @@ public class CuentaCsvLoader implements CommandLineRunner {
         }
 
         Set<Long> cuentasVistas = new HashSet<>();
+        List<Long> idsCargados = new ArrayList<>();
         int cargadas = 0;
         int rechazadas = 0;
 
@@ -92,9 +95,11 @@ public class CuentaCsvLoader implements CommandLineRunner {
                         .saldoFinal(saldoFinal)
                         .build());
                 cargadas++;
+                idsCargados.add(cuentaId);
             }
         }
         log.info("ms-cuentas: {} cuentas cargadas, {} filas rechazadas por datos invalidos.", cargadas, rechazadas);
+        log.info("ms-cuentas: ids cargados: {}", idsCargados);
     }
 
     private Long parseLong(String v) {

@@ -13,6 +13,13 @@ services:
       - "9000:9000"
     restart: on-failure
 
+  eureka-server:
+    build: ./eureka-server
+    image: eureka-server
+    ports:
+      - "8761:8761"
+    restart: on-failure
+
   ms-cuentas:
     build: ./ms-cuentas
     image: ms-cuentas
@@ -21,9 +28,11 @@ services:
     environment:
       SPRING_CONFIG_IMPORT: "configserver:http://config-server:8888"
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
     depends_on:
       - config-server
       - auth-server
+      - eureka-server
     restart: on-failure
 
   ms-movimientos:
@@ -34,9 +43,10 @@ services:
     environment:
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
-      EUREKA_CLIENT_ENABLED: "false"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
     depends_on:
       - auth-server
+      - eureka-server
     restart: on-failure
 
   ms-transacciones:
@@ -47,8 +57,10 @@ services:
     environment:
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUERURI: http://auth-server:9000
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
     depends_on:
       - auth-server
+      - eureka-server
     restart: on-failure
 
   bff-web:
